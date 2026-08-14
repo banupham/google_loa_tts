@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Google API TikTok Speaker</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:#090b10;color:#edf2f7}
+.wrap{width:min(900px,calc(100% - 24px));margin:0 auto;padding:18px 0 48px}
+h1{font-size:24px;margin:0 0 5px}
+.sub{font-size:13px;color:#8793a3;margin-bottom:16px;line-height:1.45}
+.panel{background:#11161d;border:1px solid #252c36;border-radius:16px;padding:15px;margin-bottom:14px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.grid3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.card{background:#0d1117;border:1px solid #252c36;border-radius:12px;padding:11px}
+.card b{display:block;font-size:11px;color:#8f9aaa;margin-bottom:5px}
+.card span{font-size:14px}
+label{display:block;font-size:12px;color:#9aa6b6;margin-bottom:6px}
+input,select,textarea,button{width:100%;border:1px solid #303846;background:#151a22;color:#edf2f7;border-radius:10px;padding:10px 12px;font:inherit}
+input[type=checkbox]{width:auto}
+textarea{min-height:120px;resize:vertical;font-family:Consolas,monospace}
+button{cursor:pointer;font-weight:750}
+.primary{background:#263650;min-height:52px;font-size:17px}
+.danger{background:#2b1c22}
+.buttons{display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:10px}
+.status{margin-top:10px;background:#0d1117;border:1px solid #252c36;border-radius:10px;padding:11px 12px;color:#b8c2d0;font-size:13px;line-height:1.45}
+.current{font-size:17px;min-height:55px}
+.row{display:flex;align-items:center;gap:8px}
+.hint{font-size:12px;color:#7f8b9a;margin-top:7px;line-height:1.45}
+.ok{color:#77d890}.bad{color:#ff8d8d}
+@media(max-width:760px){.grid4,.grid3,.grid2,.buttons{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>🔊 Google API TikTok Speaker</h1>
+<div class="sub">Đọc COMMENT từ TikTok LIVE middleware bằng API TTS local jQ1olc. JOIN / FOLLOW / LIKE / GIFT được nhận nhưng bỏ qua.</div>
+
+<div class="panel">
+  <div class="grid4">
+    <div class="card"><b>TTS API</b><span id="ttsState">Đang kiểm tra...</span></div>
+    <div class="card"><b>MIDDLEWARE</b><span id="middlewareState">Chưa nhận</span></div>
+    <div class="card"><b>QUEUE</b><span id="queueState">0</span></div>
+    <div class="card"><b>LOA CHÍNH</b><span id="speakerState">Chưa bật</span></div>
+  </div>
+  <div class="status current" id="currentComment">Chưa có comment đang đọc.</div>
+</div>
+
+<div class="panel">
+  <div class="grid3">
+    <div>
+      <label>Tên thiết bị loa</label>
+      <input id="deviceName" value="Điện thoại Google TTS">
+    </div>
+    <div>
+      <label>Âm lượng</label>
+      <input id="volume" type="range" min="0" max="150" value="100">
+    </div>
+    <div>
+      <label>WebSocket</label>
+      <div class="status" id="socketState" style="margin-top:0">Đang nối...</div>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button class="primary" id="enable">🔊 BẬT LOA TIKTOK</button>
+    <button class="danger" id="release">TẮT LOA</button>
+  </div>
+
+  <div class="status" id="playState">Kết nối server, sau đó bấm BẬT LOA TIKTOK.</div>
+</div>
+
+<div class="panel">
+  <div class="grid3">
+    <div>
+      <label>Ngôn ngữ TTS</label>
+      <input id="lang" value="vi">
+    </div>
+    <div>
+      <label>Giọng</label>
+      <select id="voice">
+        <option value="default">Google Translate mặc định</option>
+      </select>
+    </div>
+    <div>
+      <label>Max ký tự / segment</label>
+      <input id="chunkChars" type="number" min="30" max="150" value="80">
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:10px">
+    <div>
+      <label>Đọc tên viewer</label>
+      <div class="row">
+        <input id="readUsername" type="checkbox">
+        <span>Đọc “Tên bình luận: ...”</span>
+      </div>
+    </div>
+    <div>
+      <label>Chuẩn hóa viết tắt</label>
+      <div class="row">
+        <input id="normalizeAbbreviations" type="checkbox" checked>
+        <span>Bật</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:10px">
+    <div>
+      <label>Quy tắc tự thêm — mỗi dòng: ko=không</label>
+      <textarea id="customReplacements"></textarea>
+    </div>
+    <div>
+      <label>Cụm không đọc — mỗi dòng một cụm</label>
+      <textarea id="blockedPhrases"></textarea>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button id="saveSettings">LƯU CẤU HÌNH</button>
+    <button id="checkTts">KIỂM TRA TTS API</button>
+  </div>
+
+  <div class="buttons">
+    <button id="clearQueue">XÓA COMMENT ĐANG CHỜ</button>
+    <button id="stopCurrent" class="danger">DỪNG ĐANG ĐỌC</button>
+  </div>
+
+  <div class="status" id="settingsState">Cấu hình áp dụng cho comment nhận sau khi lưu.</div>
+</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+
+const DEVICE_ID_KEY='google_api_tiktok_speaker_device_id';
+const DEVICE_NAME_KEY='google_api_tiktok_speaker_device_name';
+
+let deviceId=localStorage.getItem(DEVICE_ID_KEY);
+if(!deviceId){
+  const r=(globalThis.crypto&&typeof crypto.randomUUID==='function')
+    ? crypto.randomUUID().slice(0,8)
+    : (Date.now().toString(36)+Math.random().toString(36).slice(2,7));
+  deviceId='speaker-'+r;
+  localStorage.setItem(DEVICE_ID_KEY,deviceId);
+}
+
+$('deviceName').value=localStorage.getItem(DEVICE_NAME_KEY)||$('deviceName').value;
+
+let ws=null;
+let reconnectTimer=null;
+let heartbeatTimer=null;
+let enabled=false;
+let audioCtx=null;
+let gainNode=null;
+let activeSource=null;
+let activeAbort=null;
+let currentJobId=null;
+let playToken=0;
+let wakeLock=null;
+
+function wsSend(obj){
+  if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(obj));
+}
+
+function setPlay(text){$('playState').textContent=text}
+
+function connectWs(){
+  if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
+
+  const proto=location.protocol==='https:'?'wss':'ws';
+  const name=$('deviceName').value.trim()||'Loa TikTok';
+
+  ws=new WebSocket(
+    `${proto}://${location.host}/ws/speaker?device_id=${encodeURIComponent(deviceId)}&name=${encodeURIComponent(name)}`
+  );
+
+  $('socketState').textContent='Đang nối...';
+
+  ws.onopen=()=>{
+    $('socketState').textContent='Online';
+    clearInterval(heartbeatTimer);
+    heartbeatTimer=setInterval(()=>wsSend({type:'ping'}),20000);
+    if(enabled)wsSend({type:'claim'});
+  };
+
+  ws.onmessage=async ev=>{
+    let msg;
+    try{msg=JSON.parse(ev.data)}catch{return}
+
+    if(msg.type==='hello'){
+      if(!enabled)setPlay(msg.message||'Đã kết nối.');
+    }else if(msg.type==='claimed'){
+      enabled=true;
+      $('enable').textContent='✅ LOA TIKTOK ĐANG BẬT';
+      setPlay('✅ Thiết bị này là loa chính. Đang chờ comment...');
+      requestWakeLock();
+    }else if(msg.type==='released'){
+      enabled=false;
+      $('enable').textContent='🔊 BẬT LOA TIKTOK';
+      setPlay('Loa đã tắt.');
+    }else if(msg.type==='comment'){
+      await playComment(msg.job);
+    }else if(msg.type==='stop'){
+      stopLocal(false);
+      setPlay('Đã dừng audio: '+(msg.reason||''));
+    }
+  };
+
+  ws.onclose=()=>{
+    $('socketState').textContent='Mất kết nối';
+    clearInterval(heartbeatTimer);
+    if(reconnectTimer)clearTimeout(reconnectTimer);
+    reconnectTimer=setTimeout(connectWs,2000);
+  };
+
+  ws.onerror=()=>{$('socketState').textContent='Lỗi'};
+}
+
+async function ensureAudio(){
+  if(!audioCtx){
+    const C=window.AudioContext||window.webkitAudioContext;
+    if(!C)throw new Error('Trình duyệt không hỗ trợ Web Audio API');
+    audioCtx=new C();
+    gainNode=audioCtx.createGain();
+    gainNode.connect(audioCtx.destination);
+  }
+
+  gainNode.gain.value=Number($('volume').value||100)/100;
+
+  if(audioCtx.state==='suspended')await audioCtx.resume();
+
+  // Unlock audio on the user's click.
+  const b=audioCtx.createBuffer(1,1,22050);
+  const s=audioCtx.createBufferSource();
+  s.buffer=b;
+  s.connect(gainNode);
+  s.start();
+}
+
+async function requestWakeLock(){
+  try{
+    if('wakeLock' in navigator){
+      wakeLock=await navigator.wakeLock.request('screen');
+    }
+  }catch{}
+}
+
+async function releaseWakeLock(){
+  try{
+    if(wakeLock){
+      await wakeLock.release();
+      wakeLock=null;
+    }
+  }catch{}
+}
+
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&enabled)requestWakeLock();
+});
+
+function stopLocal(report=true){
+  playToken++;
+
+  if(activeAbort){
+    activeAbort.abort();
+    activeAbort=null;
+  }
+
+  if(activeSource){
+    try{activeSource.stop()}catch{}
+    activeSource=null;
+  }
+
+  if(report&&currentJobId){
+    wsSend({
+      type:'failed',
+      job_id:currentJobId,
+      error:'stopped locally'
+    });
+  }
+
+  currentJobId=null;
+}
+
+async function playAudioBuffer(arrayBuffer, token){
+  await ensureAudio();
+
+  const decoded=await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+
+  if(token!==playToken)return;
+
+  const src=audioCtx.createBufferSource();
+  src.buffer=decoded;
+  src.connect(gainNode);
+  activeSource=src;
+
+  await new Promise((resolve,reject)=>{
+    src.onended=resolve;
+    try{src.start()}catch(e){reject(e)}
+  });
+
+  if(activeSource===src)activeSource=null;
+}
+
+async function playComment(job){
+  stopLocal(false);
+
+  const token=++playToken;
+  currentJobId=job.id;
+
+  try{
+    await ensureAudio();
+
+    const count=Math.max(1,Number(job.segment_count||1));
+
+    setPlay(`⏳ ${job.display_name}: ${job.text}`);
+
+    for(let i=0;i<count;i++){
+      if(token!==playToken)return;
+
+      activeAbort=new AbortController();
+
+      const r=await fetch(
+        `/audio/${encodeURIComponent(job.id)}/${i}?device_id=${encodeURIComponent(deviceId)}`,
+        {
+          cache:'no-store',
+          signal:activeAbort.signal
+        }
+      );
+
+      if(!r.ok){
+        throw new Error(await r.text()||`HTTP ${r.status}`);
+      }
+
+      const buf=await r.arrayBuffer();
+
+      if(i===0){
+        wsSend({type:'started',job_id:job.id});
+        setPlay(`🔊 ${job.display_name}: ${job.text}`);
+      }
+
+      await playAudioBuffer(buf,token);
+      activeAbort=null;
+    }
+
+    if(token===playToken){
+      currentJobId=null;
+      wsSend({type:'completed',job_id:job.id});
+      setPlay('✅ Đọc xong. Đang chờ comment tiếp theo...');
+    }
+
+  }catch(e){
+    if(e&&e.name==='AbortError')return;
+
+    const id=currentJobId||job.id;
+    currentJobId=null;
+    activeAbort=null;
+
+    wsSend({
+      type:'failed',
+      job_id:id,
+      error:String(e)
+    });
+
+    setPlay('❌ Lỗi đọc: '+String(e));
+  }
+}
+
+function parseRules(text){
+  const out={};
+  for(const line of text.split(/\r?\n/)){
+    const raw=line.trim();
+    if(!raw)continue;
+    const i=raw.indexOf('=');
+    if(i<=0)continue;
+    const k=raw.slice(0,i).trim();
+    const v=raw.slice(i+1).trim();
+    if(k&&v)out[k]=v;
+  }
+  return out;
+}
+
+function parseLines(text){
+  return text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+}
+
+function formatRules(obj){
+  return Object.entries(obj||{}).map(([k,v])=>`${k}=${v}`).join('\n');
+}
+
+async function loadSettings(){
+  const r=await fetch('/api/settings',{cache:'no-store'});
+  const s=await r.json();
+
+  $('lang').value=s.lang||'vi';
+  $('voice').value=s.voice||'default';
+  $('chunkChars').value=s.chunk_chars||80;
+  $('readUsername').checked=!!s.read_username;
+  $('normalizeAbbreviations').checked=s.normalize_abbreviations!==false;
+  $('customReplacements').value=formatRules(s.custom_replacements||{});
+  $('blockedPhrases').value=(s.blocked_phrases||[]).join('\n');
+}
+
+async function saveSettings(){
+  const body={
+    lang:$('lang').value.trim()||'vi',
+    voice:$('voice').value||'default',
+    chunk_chars:Number($('chunkChars').value||80),
+    read_username:$('readUsername').checked,
+    normalize_abbreviations:$('normalizeAbbreviations').checked,
+    custom_replacements:parseRules($('customReplacements').value),
+    blocked_phrases:parseLines($('blockedPhrases').value)
+  };
+
+  const r=await fetch('/api/settings',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+
+  const j=await r.json();
+
+  if(!r.ok)throw new Error(JSON.stringify(j));
+
+  $('settingsState').textContent='✅ Đã lưu cấu hình.';
+}
+
+async function refreshStatus(){
+  try{
+    const r=await fetch('/status',{cache:'no-store'});
+    const s=await r.json();
+
+    $('ttsState').textContent=s.tts_api&&s.tts_api.ok?'OK':'Chưa nối';
+    $('ttsState').className=s.tts_api&&s.tts_api.ok?'ok':'bad';
+
+    $('middlewareState').textContent=
+      s.stats&&s.stats.last_webhook_at?s.stats.last_webhook_at.split('T')[1]:'Chưa nhận';
+
+    $('queueState').textContent=`${s.queue_size}/${s.queue_capacity}`;
+
+    $('speakerState').textContent=s.active_speaker_name||'Chưa bật';
+
+    if(s.current_comment){
+      $('currentComment').textContent=
+        `🔊 ${s.current_comment.display_name}: ${s.current_comment.text}`;
+    }else{
+      $('currentComment').textContent='Chưa có comment đang đọc.';
+    }
+
+  }catch{
+    $('ttsState').textContent='Server lỗi';
+    $('ttsState').className='bad';
+  }
+}
+
+$('enable').onclick=async()=>{
+  try{
+    await ensureAudio();
+    localStorage.setItem(DEVICE_NAME_KEY,$('deviceName').value.trim());
+    enabled=true;
+    connectWs();
+    wsSend({type:'claim'});
+    requestWakeLock();
+  }catch(e){
+    setPlay('Không bật được audio: '+String(e));
+  }
+};
+
+$('release').onclick=()=>{
+  stopLocal(false);
+  enabled=false;
+  wsSend({type:'release'});
+  releaseWakeLock();
+};
+
+$('volume').oninput=()=>{
+  if(gainNode)gainNode.gain.value=Number($('volume').value||100)/100;
+};
+
+$('saveSettings').onclick=()=>saveSettings().catch(e=>{
+  $('settingsState').textContent='❌ '+String(e);
+});
+
+$('checkTts').onclick=async()=>{
+  $('settingsState').textContent='Đang kiểm tra TTS API...';
+  const r=await fetch('/api/check-tts',{method:'POST'});
+  const j=await r.json();
+  $('settingsState').textContent=
+    j.ok?'✅ TTS API đang hoạt động.':'❌ TTS API chưa kết nối: '+JSON.stringify(j.result);
+  refreshStatus();
+};
+
+$('clearQueue').onclick=async()=>{
+  const r=await fetch('/clear',{method:'POST'});
+  const j=await r.json();
+  $('settingsState').textContent=`Đã xóa ${j.cleared||0} comment đang chờ.`;
+};
+
+$('stopCurrent').onclick=async()=>{
+  stopLocal(false);
+  await fetch('/stop',{method:'POST'});
+};
+
+connectWs();
+loadSettings().catch(()=>{});
+refreshStatus();
+setInterval(refreshStatus,1500);
+</script>
+</body>
+</html>
