@@ -26,3 +26,4 @@ jobs:
           git add -A
           git commit -m "Restore exact Google TTS TikTok Speaker v1 ZIP"
           git push
+# retry after restoring missing base64 segment
