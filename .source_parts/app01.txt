@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import threading
+import time
+import uuid
+from collections import deque
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Optional
+
+import requests
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel, Field
+
+
+BASE_DIR = Path(__file__).resolve().parent
+WEB_FILE = BASE_DIR / "web" / "index.html"
+SETTINGS_FILE = BASE_DIR / "settings.json"
+
+HOST = os.getenv("LOA_API_HOST", "0.0.0.0")
+PORT = int(os.getenv("LOA_API_PORT", "9000"))
+EVENT_PATH = os.getenv("LOA_API_EVENT_PATH", "/tiktok-event").strip() or "/tiktok-event"
+
+TTS_API_URL = os.getenv("LOA_TTS_API_URL", "http://127.0.0.1:8090/tts").strip()
+TTS_HEALTH_URL = os.getenv("LOA_TTS_HEALTH_URL", "http://127.0.0.1:8090/health").strip()
+TTS_TIMEOUT = max(5.0, float(os.getenv("LOA_TTS_TIMEOUT", "30")))
+
+QUEUE_MAX = max(1, int(os.getenv("LOA_TTS_QUEUE_MAX", "30")))
+COMMENT_MAX_AGE = max(0.0, float(os.getenv("LOA_TTS_COMMENT_MAX_AGE", "20")))
+EVENT_ID_CACHE = max(100, int(os.getenv("LOA_TTS_EVENT_ID_CACHE", "10000")))
+
+SERVER_VERSION = "3.0"
+SERVER_INSTANCE_ID = uuid.uuid4().hex[:12]
+SERVER_SESSION_TOKEN = os.getenv("GAME_EVENT_INSTANCE_TOKEN", "").strip()
+SERVER_PID = os.getpid()
+
+
+DEFAULT_ABBREVIATIONS = {
+    "ko": "không",
+    "k0": "không",
+    "kh": "không",
+    "hk": "không",
+    "hok": "không",
+    "hong": "không",
+    "khum": "không",
+    "dc": "được",
+    "đc": "được",
+    "mn": "mọi người",
+    "mng": "mọi người",
+    "mk": "mình",
+    "mik": "mình",
+    "cx": "cũng",
+    "vs": "với",
+    "j": "gì",
+    "z": "vậy",
+    "ib": "nhắn tin",
+    "rep": "trả lời",
+    "trl": "trả lời",
+    "cmt": "bình luận",
+    "acc": "tài khoản",
+    "ae": "anh em",
+    "fl": "theo dõi",
+    "follow": "theo dõi",
+    "tym": "thả tim",
+    "thx": "cảm ơn",
+    "tks": "cảm ơn",
+    "thanks": "cảm ơn",
+    "pls": "làm ơn",
+    "yt": "YouTube",
+    "ttok": "TikTok",
+    "oki": "ô kê",
+    "okie": "ô kê",
+    "oke": "ô kê",
+}
+
+SYSTEM_COMMENT_PATTERNS = (
+    re.compile(r"\bđã\s+chia\s+sẻ\s+(?:phiên\s+)?live\b", re.I),
+    re.compile(r"\bđã\s+chia\s+se\s+(?:phiên\s+)?live\b", re.I),
+    re.compile(r"\bshared\s+(?:the\s+)?live\b", re.I),
+    re.compile(r"\bshared\s+(?:this\s+)?live\b", re.I),
+)
+
+LEADING_UI_NUMBER_RE = re.compile(r"^\s*(\d{1,3})\s+(?=\D)")
+
+
+class SpeakerSettings(BaseModel):
+    lang: str = "vi"
+    voice: str = "default"
+    read_username: bool = False
+    chunk_chars: int = Field(default=80, ge=30, le=150)
+    normalize_abbreviations: bool = True
+    custom_replacements: dict[str, str] = Field(default_factory=dict)
+    blocked_phrases: list[str] = Field(default_factory=list)
+
+
+class CommentJob(BaseModel):
+    id: str
+    event_id: str
+    created_at: float
+    display_name: str
+    unique_id: Optional[str] = None
+    text: str
+    speech_text: str
+    segments: list[str]
+
+
+settings_lock = threading.Lock()
+settings = SpeakerSettings()
+
+comment_queue: asyncio.Queue[CommentJob] = asyncio.Queue(maxsize=QUEUE_MAX)
+
+speakers: dict[str, dict[str, Any]] = {}
+active_speaker_id: Optional[str] = None
+active_speaker_event = asyncio.Event()
+state_lock = asyncio.Lock()
+
+pending_completion: dict[str, asyncio.Future] = {}
+worker_task: Optional[asyncio.Task] = None
+
+current_job: Optional[CommentJob] = None
+current_started_at: Optional[float] = None
+
+seen_event_ids: set[str] = set()
+seen_event_order: deque[str] = deque()
+seen_event_lock = threading.Lock()
+
+tts_session = requests.Session()
+
+stats = {
+    "webhook_requests": 0,
+    "comments_received": 0,
+    "comments_queued": 0,
+    "comments_played": 0,
+    "comments_failed": 0,
+    "comments_dropped": 0,
+    "comments_expired": 0,
+    "comments_filtered_system": 0,
+    "comments_filtered_custom": 0,
+    "comments_abbreviation_normalized": 0,
+    "comments_cleaned_ui_prefix": 0,
+    "ignored_non_comment": 0,
+    "duplicate_events": 0,
+    "tts_requests": 0,
+    "tts_success": 0,
+    "tts_failed": 0,
+    "last_tts_status": None,
+    "last_tts_ms": None,
+    "last_webhook_at": None,
+    "last_comment_at": None,
+    "last_client_ip": None,
+    "last_event_type": None,
+    "last_health_handshake_at": None,
+}
+
+tts_health_cache = {
+    "ok": False,
+    "checked_at": None,
+    "detail": "chưa kiểm tra",
+}
+
+
+def now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
+
+def sanitize_settings(value: SpeakerSettings) -> SpeakerSettings:
+    lang = re.sub(r"[^A-Za-z0-9_-]", "", value.lang.strip())[:20] or "vi"
+    voice = re.sub(r"[^A-Za-z0-9_.-]", "", value.voice.strip())[:50] or "default"
+
+    replacements = {}
+    for raw_key, raw_value in value.custom_replacements.items():
+        key = re.sub(r"\s+", " ", str(raw_key or "")).strip()
+        val = re.sub(r"\s+", " ", str(raw_value or "")).strip()
+        if not key or not val:
+            continue
+        if len(key) > 60 or len(val) > 120:
+            continue
+        replacements[key] = val
+        if len(replacements) >= 200:
+            break
+
+    blocked = []
+    seen = set()
+    for raw in value.blocked_phrases:
+        phrase = re.sub(r"\s+", " ", str(raw or "")).strip()
+        marker = phrase.casefold()
+        if not phrase or marker in seen or len(phrase) > 160:
+            continue
+        seen.add(marker)
+        blocked.append(phrase)
+        if len(blocked) >= 200:
+            break
+
+    return value.model_copy(update={
+        "lang": lang,
+        "voice": voice,
+        "custom_replacements": replacements,
+        "blocked_phrases": blocked,
+    })
+
+
+def save_settings() -> None:
+    SETTINGS_FILE.write_text(
+        json.dumps(settings.model_dump(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_settings() -> None:
+    global settings
+
+    if not SETTINGS_FILE.exists():
+        save_settings()
+        return
+
+    try:
+        obj = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        settings = sanitize_settings(SpeakerSettings.model_validate(obj))
+    except Exception as exc:
+        print(f"[SETTINGS] Lỗi settings.json, dùng mặc định: {exc}")
+        settings = SpeakerSettings()
+
+
+def register_event_id(event_id: str) -> bool:
+    if not event_id:
+        return True
+
+    with seen_event_lock:
+        if event_id in seen_event_ids:
+            return False
+
+        seen_event_ids.add(event_id)
+        seen_event_order.append(event_id)
+
+        while len(seen_event_order) > EVENT_ID_CACHE:
+            seen_event_ids.discard(seen_event_order.popleft())
+
+    return True
+
+
+def normalize_comment_text(value: Any) -> tuple[str, bool]:
+    text = str(value or "").replace("\u200b", " ").replace("\ufeff", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if not text:
+        return "", False
+
+    cleaned = LEADING_UI_NUMBER_RE.sub("", text, count=1).strip()
+    return cleaned, cleaned != text
+
+
+def is_system_comment(text: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    return bool(value) and any(p.search(value) for p in SYSTEM_COMMENT_PATTERNS)
+
+
+def custom_block_match(text: str, cfg: SpeakerSettings) -> Optional[str]:
+    folded = text.casefold()
+    for phrase in cfg.blocked_phrases:
+        if phrase.casefold() in folded:
+            return phrase
+    return None
+
+
+def replace_phrase(text: str, source: str, target: str) -> tuple[str, int]:
+    pattern = re.compile(rf"(?<!\w){re.escape(source)}(?!\w)", re.I)
+    return pattern.subn(lambda _: target, text)
+
+
+def normalize_abbreviations(text: str, cfg: SpeakerSettings) -> tuple[str, int]:
+    if not cfg.normalize_abbreviations:
+        return text, 0
+
+    rules = dict(DEFAULT_ABBREVIATIONS)
+    rules.update(cfg.custom_replacements)
+
+    output = text
+    total = 0
+
+    for source in sorted(rules, key=len, reverse=True):
+        output, count = replace_phrase(output, source, rules[source])
+        total += count
+
+    return re.sub(r"\s+", " ", output).strip(), total
+
+
+def find_cut(text: str, limit: int) -> int:
+    if len(text) <= limit:
+        return len(text)
+
+    window = text[:limit]
+    min_good = max(10, int(limit * 0.45))
+
+    for chars in (".!?…", ",;:", " "):
+        positions = [i + 1 for i, ch in enumerate(window) if ch in chars]
+        good = [p for p in positions if p >= min_good]
+        if good:
+            return good[-1]
+
+    return limit
+
+
+def split_text(text: str, max_chars: int) -> list[str]:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return []
+
+    out = []
+    remaining = text
+
+    while remaining:
+        if len(remaining) <= max_chars:
+            out.append(remaining)
+            break
+
+        cut = find_cut(remaining, max_chars)
+        left = remaining[:cut].strip()
+        remaining = remaining[cut:].strip()
+
+        if not left:
+            left = remaining[:max_chars]
+            remaining = remaining[max_chars:].strip()
+
+        out.append(left)
+
+    return [x for x in out if x]
+
+
+def make_speech_text(display_name: str, text: str, cfg: SpeakerSettings) -> str:
+    if cfg.read_username and display_name:
+        return f"{display_name} bình luận: {text}"
+    return text
+
+
+def check_tts_health_sync() -> dict:
+    started = time.perf_counter()
+    try:
+        r = tts_session.get(TTS_HEALTH_URL, timeout=min(5.0, TTS_TIMEOUT))
+        elapsed = (time.perf_counter() - started) * 1000
+        if 200 <= r.status_code < 300:
+            try:
+                body = r.json()
+            except Exception:
+                body = {}
+            return {
+                "ok": bool(body.get("ok", True)),
+                "status": r.status_code,
+                "ms": round(elapsed, 2),
+                "detail": body,
+            }
+        return {
+            "ok": False,
+            "status": r.status_code,
+            "ms": round(elapsed, 2),
+            "detail": r.text[:300],
+        }
+ 
