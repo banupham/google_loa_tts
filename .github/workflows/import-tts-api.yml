@@ -1,0 +1,35 @@
+name: Import TTS API source
+
+on:
+  push:
+    paths:
+      - '.import_tts_api/**'
+      - '.github/workflows/import-tts-api.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild, verify and extract TTS API source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .import_tts_api/part1.b64 .import_tts_api/part2.b64 .import_tts_api/part3.b64 .import_tts_api/part4.b64 > /tmp/tts_api.b64
+          base64 -d /tmp/tts_api.b64 > /tmp/google_translate_tts_api_v1.zip
+          echo '79a8652a112cfbf3c70f3d96a03bff60cee3be364ecc33b0816571073bc025bc  /tmp/google_translate_tts_api_v1.zip' | sha256sum -c -
+          rm -rf tts_api
+          mkdir -p tts_api
+          unzip -q /tmp/google_translate_tts_api_v1.zip -d tts_api
+          rm -rf .import_tts_api
+          rm -f .github/workflows/import-tts-api.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add standalone Google TTS API source under tts_api' || exit 0
+          git push
