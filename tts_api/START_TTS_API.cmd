@@ -2,6 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
+if not "%~1"=="" set "TTS_API_PORT=%~1"
+if not defined TTS_API_PORT set "TTS_API_PORT=8090"
+
 echo ===============================================
 echo GOOGLE TRANSLATE STANDALONE TTS API V1
 echo ===============================================
@@ -18,10 +21,10 @@ if errorlevel 1 (
 )
 
 echo.
-echo TTS API: http://127.0.0.1:8090
-echo Voices : http://127.0.0.1:8090/voices
+echo TTS API: http://127.0.0.1:%TTS_API_PORT%
+echo Voices : http://127.0.0.1:%TTS_API_PORT%/voices
 echo Ctrl+C de dung.
 echo.
 
-py tts_api.py --host 127.0.0.1 --port 8090
+py tts_api.py --host 127.0.0.1 --port %TTS_API_PORT%
 pause
