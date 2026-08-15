@@ -21,7 +21,7 @@ if errorlevel 1 (
     py -m pip install -r requirements.txt
     if errorlevel 1 (
         echo Cai dependency that bai.
-        pause
+        if /i not "%MODULE_HUB_MANAGED%"=="1" pause
         exit /b 1
     )
 )
@@ -37,4 +37,6 @@ echo   http://127.0.0.1:%LOA_API_PORT%/tiktok-event
 echo.
 
 py app.py
-pause
+set "EXIT_CODE=%ERRORLEVEL%"
+if /i not "%MODULE_HUB_MANAGED%"=="1" pause
+endlocal & exit /b %EXIT_CODE%
