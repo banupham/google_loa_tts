@@ -15,7 +15,7 @@ if errorlevel 1 (
     py -m pip install -r requirements.txt
     if errorlevel 1 (
         echo Cai requests that bai.
-        pause
+        if /i not "%MODULE_HUB_MANAGED%"=="1" pause
         exit /b 1
     )
 )
@@ -27,4 +27,6 @@ echo Ctrl+C de dung.
 echo.
 
 py tts_api.py --host 127.0.0.1 --port %TTS_API_PORT%
-pause
+set "EXIT_CODE=%ERRORLEVEL%"
+if /i not "%MODULE_HUB_MANAGED%"=="1" pause
+endlocal & exit /b %EXIT_CODE%
